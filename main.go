@@ -1,12 +1,19 @@
 package main
 
 import (
+	"compress/gzip"
 	"encoding/json"
 	"flag"
+	"io"
 	"log"
 	"net/http"
 	"os"
+	"os/user"
+	"strings"
+	"sync"
 	"time"
+
+	"github.com/matishsiao/goInfo"
 )
 
 var startTime string
@@ -51,17 +58,54 @@ func getIntrospection(w http.ResponseWriter, r *http.Request) {
 		data := introspect()
 
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		encoder := json.NewEncoder(w)
+
+		var encoder *json.Encoder
+
+		acceptEncoding := r.Header.Get("Accept-Encoding")
+		if strings.Contains(acceptEncoding, "gzip") {
+			w.Header().Set("Content-Encoding", "gzip")
+			// Get a Writer from the Pool
+			gzw := takeZipper(w)
+			// When done, put the Writer back in to the Pool
+			defer returnZipper(gzw)
+			defer close(gzw)
+			encoder = json.NewEncoder(gzw)
+		} else {
+			encoder = json.NewEncoder(w)
+		}
+
 		encoder.SetEscapeHTML(false)
 		encoder.SetIndent("", "")
 		err := encoder.Encode(data)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
 		}
 	default:
 		w.Header().Set("Allow", "GET")
 		http.Error(w, "405 method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// use a sync.Pool so we can re-use Writers between goroutines
+var zippersPool sync.Pool
+
+func takeZipper(w io.Writer) *gzip.Writer {
+	if z := zippersPool.Get(); z != nil {
+		zipper := z.(*gzip.Writer)
+		zipper.Reset(w)
+		return zipper
+	}
+	return gzip.NewWriter(w)
+}
+
+func returnZipper(zipper *gzip.Writer) {
+	zippersPool.Put(zipper)
+}
+
+func close(c io.Closer) {
+	err := c.Close()
+	if err != nil {
+		log.Fatal(err)
 	}
 }
 
@@ -77,12 +121,40 @@ func writeIntrospection() {
 }
 
 type introspection struct {
-	StartTime   string `json:"startTime"`
-	RequestTime string `json:"requestTime"`
+	StartTime   string               `json:"startTime"`
+	RequestTime string               `json:"requestTime"`
+	Hostname    string               `json:"hostname"`
+	User        *user.User           `json:"user"`
+	Group       *user.Group          `json:"group"`
+	System      *goInfo.GoInfoObject `json:"system"`
+	Env         map[string]string    `json:"env"`
 }
 
 func introspect() introspection {
 	now := utcNow()
+
+	hostname, err := os.Hostname()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	currentUser, err := user.Current()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	primaryGroup, err := user.LookupGroupId(currentUser.Gid)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	system := goInfo.GetInfo()
+
+	env := make(map[string]string)
+	for _, item := range os.Environ() {
+		splits := strings.SplitN(item, "=", 2)
+		env[splits[0]] = splits[1]
+	}
 
 	// EC2: https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-metadata.html
 	// GET http://169.254.169.254/latest/dynamic/instance-identity/document
@@ -114,5 +186,10 @@ func introspect() introspection {
 	return introspection{
 		StartTime:   startTime,
 		RequestTime: now,
+		Hostname:    hostname,
+		User:        currentUser,
+		Group:       primaryGroup,
+		System:      system,
+		Env:         env,
 	}
 }
