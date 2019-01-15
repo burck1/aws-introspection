@@ -107,6 +107,10 @@ func introspect() introspection {
 	// ECS: https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-metadata-endpoint.html
 	// ${ECS_CONTAINER_METADATA_URI}
 
+	// ECS env vars
+	// https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs-agent-config.html
+	// https://docs.aws.amazon.com/AmazonECS/latest/developerguide/container-metadata.html
+
 	return introspection{
 		StartTime:   startTime,
 		RequestTime: now,
