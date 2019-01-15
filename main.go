@@ -21,8 +21,8 @@ var startTime string
 func main() {
 	startTime = utcNow()
 
-	serverPtr := flag.Bool("server", false, "host as a http server")
-	portPtr := flag.String("port", "8080", "the port to host the server at")
+	serverPtr := flag.Bool("s", false, "host as a http server")
+	portPtr := flag.String("port", "42011", "the port to host the server at")
 
 	flag.Parse()
 
