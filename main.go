@@ -13,18 +13,23 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/ec2metadata"
+	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/matishsiao/goInfo"
 )
 
 var startTime string
+var metadata *ec2metadata.EC2Metadata
 
 func main() {
 	startTime = utcNow()
 
 	serverPtr := flag.Bool("s", false, "host as a http server")
 	portPtr := flag.String("port", "42011", "the port to host the server at")
-
 	flag.Parse()
+
+	metadata = newMetadataClient()
 
 	if *serverPtr {
 		// setup as server
@@ -109,6 +114,15 @@ func close(c io.Closer) {
 	}
 }
 
+func newMetadataClient() *ec2metadata.EC2Metadata {
+	awsConfig := aws.NewConfig()
+	metadataSession, err := session.NewSession(awsConfig)
+	if err != nil {
+		log.Fatal("session.NewSession: ", err)
+	}
+	return ec2metadata.New(metadataSession)
+}
+
 func writeIntrospection() {
 	data := introspect()
 	encoder := json.NewEncoder(os.Stdout)
@@ -121,13 +135,14 @@ func writeIntrospection() {
 }
 
 type introspection struct {
-	StartTime   string               `json:"startTime"`
-	RequestTime string               `json:"requestTime"`
-	Hostname    string               `json:"hostname"`
-	User        *user.User           `json:"user"`
-	Group       *user.Group          `json:"group"`
-	System      *goInfo.GoInfoObject `json:"system"`
-	Env         map[string]string    `json:"env"`
+	StartTime   string                                   `json:"startTime"`
+	RequestTime string                                   `json:"requestTime"`
+	Hostname    string                                   `json:"hostname"`
+	User        *user.User                               `json:"user"`
+	Group       *user.Group                              `json:"group"`
+	System      *goInfo.GoInfoObject                     `json:"system"`
+	Env         map[string]string                        `json:"env"`
+	EC2         *ec2metadata.EC2InstanceIdentityDocument `json:"ec2"`
 }
 
 func introspect() introspection {
@@ -157,24 +172,14 @@ func introspect() introspection {
 	}
 
 	// EC2: https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-metadata.html
-	// GET http://169.254.169.254/latest/dynamic/instance-identity/document
-	// {
-	// 	"devpayProductCodes" : null,
-	// 	"marketplaceProductCodes" : [ "1abc2defghijklm3nopqrs4tu" ],
-	// 	"availabilityZone" : "us-west-2b",
-	// 	"privateIp" : "10.158.112.84",
-	// 	"version" : "2017-09-30",
-	// 	"instanceId" : "i-1234567890abcdef0",
-	// 	"billingProducts" : null,
-	// 	"instanceType" : "t2.micro",
-	// 	"accountId" : "123456789012",
-	// 	"imageId" : "ami-5fb8c835",
-	// 	"pendingTime" : "2016-11-19T16:32:11Z",
-	// 	"architecture" : "x86_64",
-	// 	"kernelId" : null,
-	// 	"ramdiskId" : null,
-	// 	"region" : "us-west-2"
-	// }
+	var ec2 *ec2metadata.EC2InstanceIdentityDocument
+	if metadata.Available() {
+		iid, err := metadata.GetInstanceIdentityDocument()
+		if err != nil {
+			log.Fatal("metadata.GetInstanceIdentityDocument: ", err)
+		}
+		ec2 = &iid
+	}
 
 	// ECS: https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-metadata-endpoint.html
 	// ${ECS_CONTAINER_METADATA_URI}
@@ -191,5 +196,6 @@ func introspect() introspection {
 		Group:       primaryGroup,
 		System:      system,
 		Env:         env,
+		EC2:         ec2,
 	}
 }
