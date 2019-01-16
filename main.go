@@ -176,6 +176,52 @@ func httpGetJSON(client *http.Client, endpoint string) map[string]interface{} {
 	return data
 }
 
+func getContainerIDFromtaskMetadataJSON(taskMetadata map[string]interface{}) string {
+	// this function gets the DockerId of the first container listed
+	// in the task metadata endpoint where the Type == NORMAL
+	// this same logic is used by the taskmetadata-validator in github.com/aws/amazon-ecs-agent
+	// https://github.com/aws/amazon-ecs-agent/blob/master/misc/taskmetadata-validator/taskmetadata-validator.go
+	/*
+		{
+			"Containers": [{
+				"Type": "foo",
+				"DockerId": "123"
+			}, {
+				"Type": "NORMAL",
+				"DockerId": "456"
+			}]
+		}
+	*/
+	containerID := ""
+	containersRaw, ok := taskMetadata["Containers"]
+	if ok {
+		containers, ok := containersRaw.([]interface{})
+		if ok {
+			for _, containerRaw := range containers {
+				container, ok := containerRaw.(map[string]interface{})
+				if ok {
+					containerTypeRaw, ok := container["Type"]
+					if ok {
+						containerType, ok := containerTypeRaw.(string)
+						if ok {
+							if containerType == "NORMAL" {
+								containerIDRaw, ok := container["DockerId"]
+								if ok {
+									containerID, ok = containerIDRaw.(string)
+									if ok {
+										break
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	return containerID
+}
+
 type introspection struct {
 	StartTime                string                                   `json:"startTime"`
 	RequestTime              string                                   `json:"requestTime"`
@@ -259,34 +305,7 @@ func introspect() introspection {
 		taskMetadata = httpGetJSON(client, taskMetadataPath)
 		taskStats = httpGetJSON(client, taskStatsPath)
 
-		containerID := ""
-		containersRaw, ok := taskMetadata["Containers"]
-		if ok {
-			containers, ok := containersRaw.([]interface{})
-			if ok {
-				for _, containerRaw := range containers {
-					container, ok := containerRaw.(map[string]interface{})
-					if ok {
-						containerTypeRaw, ok := container["Type"]
-						if ok {
-							containerType, ok := containerTypeRaw.(string)
-							if ok {
-								if containerType == "NORMAL" {
-									containerIDRaw, ok := container["DockerId"]
-									if ok {
-										containerID, ok = containerIDRaw.(string)
-										if ok {
-											break
-										}
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-
+		containerID := getContainerIDFromtaskMetadataJSON(taskMetadata)
 		if containerID != "" {
 			containerMetadataPath = taskMetadataPath + "/" + containerID
 			containerStatsPath = taskStatsPath + "/" + containerID
