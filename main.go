@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"io"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
@@ -134,15 +135,47 @@ func writeIntrospection() {
 	}
 }
 
+func httpGet(client *http.Client, endpoint string) io.ReadCloser {
+	resp, err := client.Get(endpoint)
+	if err != nil {
+		log.Fatal("GET "+endpoint+": ", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		if resp.Body != nil {
+			defer close(resp.Body)
+		}
+		log.Fatal("GET " + endpoint + " > " + string(resp.StatusCode) + " " + resp.Status)
+	}
+	return resp.Body
+}
+
+func httpGetString(client *http.Client, endpoint string) string {
+	body := httpGet(client, endpoint)
+	if body == nil {
+		return ""
+	}
+	defer close(body)
+	data, err := ioutil.ReadAll(body)
+	if err != nil {
+		log.Fatal("ioutil.ReadAll: ", err)
+	}
+	return string(data)
+}
+
 type introspection struct {
-	StartTime   string                                   `json:"startTime"`
-	RequestTime string                                   `json:"requestTime"`
-	Hostname    string                                   `json:"hostname"`
-	User        *user.User                               `json:"user"`
-	Group       *user.Group                              `json:"group"`
-	System      *goInfo.GoInfoObject                     `json:"system"`
-	Env         map[string]string                        `json:"env"`
-	EC2         *ec2metadata.EC2InstanceIdentityDocument `json:"ec2"`
+	StartTime                string                                   `json:"startTime"`
+	RequestTime              string                                   `json:"requestTime"`
+	Hostname                 string                                   `json:"hostname"`
+	User                     *user.User                               `json:"user"`
+	Group                    *user.Group                              `json:"group"`
+	System                   *goInfo.GoInfoObject                     `json:"system"`
+	Env                      map[string]string                        `json:"env"`
+	EC2InstanceMetadata      *ec2metadata.EC2InstanceIdentityDocument `json:"ec2InstanceMetadata"`
+	ECSContainerMetadata     *string                                  `json:"ecsContainerMetadata"`
+	ECSContainerStats        *string                                  `json:"ecsContainerStats"`
+	ECSTaskMetadata          *string                                  `json:"ecsTaskMetadata"`
+	ECSTaskStats             *string                                  `json:"ecsTaskStats"`
+	ECSContainerMetadataFile *string                                  `json:"ecsContainerMetadataFile"`
 }
 
 func introspect() introspection {
@@ -182,20 +215,60 @@ func introspect() introspection {
 	}
 
 	// ECS: https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-metadata-endpoint.html
-	// ${ECS_CONTAINER_METADATA_URI}
+	// https://github.com/aws/amazon-ecs-agent/blob/master/misc/v3-task-endpoint-validator/v3-task-endpoint-validator.go
+	var hasContainerMetadataPath, hasExecutionEnv bool
+	var executionEnv, containerMetadataPath, containerStatsPath, taskMetadataPath, taskStatsPath string
+	var containerMetadata, containerStats, taskMetadata, taskStats string
+	containerMetadataPath, hasContainerMetadataPath = os.LookupEnv("ECS_CONTAINER_METADATA_URI")
+	executionEnv, hasExecutionEnv = os.LookupEnv("AWS_EXECUTION_ENV")
+	if hasContainerMetadataPath {
+		// https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-metadata-endpoint-v3.html
+		containerStatsPath = containerMetadataPath + "/stats"
+		taskMetadataPath = containerMetadataPath + "/task"
+		taskStatsPath = taskMetadataPath + "/stats"
 
-	// ECS env vars
-	// https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs-agent-config.html
+		client := &http.Client{
+			Timeout: 5 * time.Second,
+		}
+		containerMetadata = httpGetString(client, containerMetadataPath)
+		containerStats = httpGetString(client, containerStatsPath)
+		taskMetadata = httpGetString(client, taskMetadataPath)
+		taskStats = httpGetString(client, taskStatsPath)
+	} else if hasExecutionEnv && executionEnv == "AWS_ECS_EC2" {
+		// https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-metadata-endpoint-v2.html
+		taskMetadataPath = "http://169.254.170.2/v2/metadata"
+		taskStatsPath = "http://169.254.170.2/v2/stats"
+
+		client := &http.Client{
+			Timeout: 5 * time.Second,
+		}
+		taskMetadata = httpGetString(client, taskMetadataPath)
+		taskStats = httpGetString(client, taskStatsPath)
+	}
+
 	// https://docs.aws.amazon.com/AmazonECS/latest/developerguide/container-metadata.html
+	var containerMetadataFile string
+	metadataFile, hasMetadataFile := os.LookupEnv("ECS_CONTAINER_METADATA_FILE")
+	if hasMetadataFile {
+		data, err := ioutil.ReadFile(metadataFile)
+		if err == nil {
+			containerMetadataFile = string(data)
+		}
+	}
 
 	return introspection{
-		StartTime:   startTime,
-		RequestTime: now,
-		Hostname:    hostname,
-		User:        currentUser,
-		Group:       primaryGroup,
-		System:      system,
-		Env:         env,
-		EC2:         ec2,
+		StartTime:                startTime,
+		RequestTime:              now,
+		Hostname:                 hostname,
+		User:                     currentUser,
+		Group:                    primaryGroup,
+		System:                   system,
+		Env:                      env,
+		EC2InstanceMetadata:      ec2,
+		ECSContainerMetadata:     &containerMetadata,
+		ECSContainerStats:        &containerStats,
+		ECSTaskMetadata:          &taskMetadata,
+		ECSTaskStats:             &taskStats,
+		ECSContainerMetadataFile: &containerMetadataFile,
 	}
 }
