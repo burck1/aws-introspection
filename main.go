@@ -27,6 +27,7 @@ func main() {
 
 	serverPtr := flag.Bool("s", false, "host as a http server")
 	portPtr := flag.String("port", "42011", "the port to host the server at")
+	compactPtr := flag.Bool("c", false, "output compact json")
 	flag.Parse()
 
 	metadata = newMetadataClient()
@@ -42,7 +43,7 @@ func main() {
 		}
 	} else {
 		// output to command line
-		writeIntrospection()
+		writeIntrospection(*compactPtr)
 	}
 }
 
@@ -123,11 +124,15 @@ func newMetadataClient() *ec2metadata.EC2Metadata {
 	return ec2metadata.New(metadataSession)
 }
 
-func writeIntrospection() {
+func writeIntrospection(compact bool) {
 	data := introspect()
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetEscapeHTML(false)
-	encoder.SetIndent("", "  ")
+	if compact {
+		encoder.SetIndent("", "")
+	} else {
+		encoder.SetIndent("", "  ")
+	}
 	err := encoder.Encode(data)
 	if err != nil {
 		log.Fatal("MarshalIndent:", err)
