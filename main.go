@@ -262,18 +262,23 @@ func introspect() introspection {
 		containerID := ""
 		containersRaw, ok := taskMetadata["Containers"]
 		if ok {
-			containers, ok := containersRaw.([]map[string]interface{})
+			containers, ok := containersRaw.([]interface{})
 			if ok {
-				for _, container := range containers {
-					containerTypeRaw, ok := container["Type"]
+				for _, containerRaw := range containers {
+					container, ok := containerRaw.(map[string]interface{})
 					if ok {
-						containerType, ok := containerTypeRaw.(string)
-						if ok && containerType == "NORMAL" {
-							containerIDRaw, ok := container["DockerId"]
+						containerTypeRaw, ok := container["Type"]
+						if ok {
+							containerType, ok := containerTypeRaw.(string)
 							if ok {
-								containerID, ok = containerIDRaw.(string)
-								if ok {
-									break
+								if containerType == "NORMAL" {
+									containerIDRaw, ok := container["DockerId"]
+									if ok {
+										containerID, ok = containerIDRaw.(string)
+										if ok {
+											break
+										}
+									}
 								}
 							}
 						}
@@ -283,8 +288,11 @@ func introspect() introspection {
 		}
 
 		if containerID != "" {
-			containerMetadata = httpGetJSON(client, taskMetadataPath+"/"+containerID)
-			containerStats = httpGetJSON(client, taskStatsPath+"/"+containerID)
+			containerMetadataPath = taskMetadataPath + "/" + containerID
+			containerStatsPath = taskStatsPath + "/" + containerID
+
+			containerMetadata = httpGetJSON(client, containerMetadataPath)
+			containerStats = httpGetJSON(client, containerStatsPath)
 		}
 	}
 
