@@ -50,6 +50,8 @@ $ ./introspect -c | jq -r '.system.Kernel'
 windows
 $ ./introspect -c | jq -r '.env.Path'
 C:\Windows;C:\Windows\system32;C:\Python37\Scripts\;C:\Python37\;C:\Program Files\dotnet\
+$ ./introspect -c | jq -r '.ec2InstanceMetadata.PrivateIP'
+10.20.30.40
 ```
 
 ```sh
