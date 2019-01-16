@@ -44,6 +44,15 @@ $ ./introspect
 ```
 
 ```sh
+$ ./introspect -c | jq -r '.startTime'
+2019-01-16T05:48:19.8758986Z
+$ ./introspect -c | jq -r '.system.Kernel'
+windows
+$ ./introspect -c | jq -r '.env.Path'
+C:\Windows;C:\Windows\system32;C:\Python37\Scripts\;C:\Python37\;C:\Program Files\dotnet\
+```
+
+```sh
 $ ./introspect -s
 2019/01/15 23:43:22 Server listening on 0.0.0.0:42011
 # Visit http://localhost:42011 in your browser
