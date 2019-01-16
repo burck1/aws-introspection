@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"flag"
 	"io"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
@@ -149,17 +148,32 @@ func httpGet(client *http.Client, endpoint string) io.ReadCloser {
 	return resp.Body
 }
 
-func httpGetString(client *http.Client, endpoint string) string {
+// func httpGetString(client *http.Client, endpoint string) string {
+// 	body := httpGet(client, endpoint)
+// 	if body == nil {
+// 		return ""
+// 	}
+// 	defer close(body)
+// 	data, err := ioutil.ReadAll(body)
+// 	if err != nil {
+// 		log.Fatal("ioutil.ReadAll: ", err)
+// 	}
+// 	return string(data)
+// }
+
+func httpGetJSON(client *http.Client, endpoint string) map[string]interface{} {
 	body := httpGet(client, endpoint)
 	if body == nil {
-		return ""
+		return nil
 	}
 	defer close(body)
-	data, err := ioutil.ReadAll(body)
+	var data map[string]interface{}
+	decoder := json.NewDecoder(body)
+	err := decoder.Decode(&data)
 	if err != nil {
-		log.Fatal("ioutil.ReadAll: ", err)
+		log.Fatal("json.NewDecoder.Decode: ", err)
 	}
-	return string(data)
+	return data
 }
 
 type introspection struct {
@@ -171,11 +185,11 @@ type introspection struct {
 	System                   *goInfo.GoInfoObject                     `json:"system"`
 	Env                      map[string]string                        `json:"env"`
 	EC2InstanceMetadata      *ec2metadata.EC2InstanceIdentityDocument `json:"ec2InstanceMetadata"`
-	ECSContainerMetadata     *string                                  `json:"ecsContainerMetadata"`
-	ECSContainerStats        *string                                  `json:"ecsContainerStats"`
-	ECSTaskMetadata          *string                                  `json:"ecsTaskMetadata"`
-	ECSTaskStats             *string                                  `json:"ecsTaskStats"`
-	ECSContainerMetadataFile *string                                  `json:"ecsContainerMetadataFile"`
+	ECSContainerMetadata     map[string]interface{}                   `json:"ecsContainerMetadata"`
+	ECSContainerStats        map[string]interface{}                   `json:"ecsContainerStats"`
+	ECSTaskMetadata          map[string]interface{}                   `json:"ecsTaskMetadata"`
+	ECSTaskStats             map[string]interface{}                   `json:"ecsTaskStats"`
+	ECSContainerMetadataFile map[string]interface{}                   `json:"ecsContainerMetadataFile"`
 }
 
 func introspect() introspection {
@@ -218,7 +232,7 @@ func introspect() introspection {
 	// https://github.com/aws/amazon-ecs-agent/blob/master/misc/v3-task-endpoint-validator/v3-task-endpoint-validator.go
 	var hasContainerMetadataPath, hasExecutionEnv bool
 	var executionEnv, containerMetadataPath, containerStatsPath, taskMetadataPath, taskStatsPath string
-	var containerMetadata, containerStats, taskMetadata, taskStats string
+	var containerMetadata, containerStats, taskMetadata, taskStats map[string]interface{}
 	containerMetadataPath, hasContainerMetadataPath = os.LookupEnv("ECS_CONTAINER_METADATA_URI")
 	executionEnv, hasExecutionEnv = os.LookupEnv("AWS_EXECUTION_ENV")
 	if hasContainerMetadataPath {
@@ -230,10 +244,10 @@ func introspect() introspection {
 		client := &http.Client{
 			Timeout: 5 * time.Second,
 		}
-		containerMetadata = httpGetString(client, containerMetadataPath)
-		containerStats = httpGetString(client, containerStatsPath)
-		taskMetadata = httpGetString(client, taskMetadataPath)
-		taskStats = httpGetString(client, taskStatsPath)
+		containerMetadata = httpGetJSON(client, containerMetadataPath)
+		containerStats = httpGetJSON(client, containerStatsPath)
+		taskMetadata = httpGetJSON(client, taskMetadataPath)
+		taskStats = httpGetJSON(client, taskStatsPath)
 	} else if hasExecutionEnv && executionEnv == "AWS_ECS_EC2" {
 		// https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-metadata-endpoint-v2.html
 		taskMetadataPath = "http://169.254.170.2/v2/metadata"
@@ -242,17 +256,50 @@ func introspect() introspection {
 		client := &http.Client{
 			Timeout: 5 * time.Second,
 		}
-		taskMetadata = httpGetString(client, taskMetadataPath)
-		taskStats = httpGetString(client, taskStatsPath)
+		taskMetadata = httpGetJSON(client, taskMetadataPath)
+		taskStats = httpGetJSON(client, taskStatsPath)
+
+		containerID := ""
+		containersRaw, ok := taskMetadata["Containers"]
+		if ok {
+			containers, ok := containersRaw.([]map[string]interface{})
+			if ok {
+				for _, container := range containers {
+					containerTypeRaw, ok := container["Type"]
+					if ok {
+						containerType, ok := containerTypeRaw.(string)
+						if ok && containerType == "NORMAL" {
+							containerIDRaw, ok := container["DockerId"]
+							if ok {
+								containerID, ok = containerIDRaw.(string)
+								if ok {
+									break
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+
+		if containerID != "" {
+			containerMetadata = httpGetJSON(client, taskMetadataPath+"/"+containerID)
+			containerStats = httpGetJSON(client, taskStatsPath+"/"+containerID)
+		}
 	}
 
 	// https://docs.aws.amazon.com/AmazonECS/latest/developerguide/container-metadata.html
-	var containerMetadataFile string
+	var containerMetadataFile map[string]interface{}
 	metadataFile, hasMetadataFile := os.LookupEnv("ECS_CONTAINER_METADATA_FILE")
 	if hasMetadataFile {
-		data, err := ioutil.ReadFile(metadataFile)
+		f, err := os.Open(metadataFile)
 		if err == nil {
-			containerMetadataFile = string(data)
+			defer close(f)
+			decoder := json.NewDecoder(f)
+			err := decoder.Decode(&containerMetadataFile)
+			if err != nil {
+				log.Fatal("json.NewDecoder.Decode: ", err)
+			}
 		}
 	}
 
@@ -265,10 +312,10 @@ func introspect() introspection {
 		System:                   system,
 		Env:                      env,
 		EC2InstanceMetadata:      ec2,
-		ECSContainerMetadata:     &containerMetadata,
-		ECSContainerStats:        &containerStats,
-		ECSTaskMetadata:          &taskMetadata,
-		ECSTaskStats:             &taskStats,
-		ECSContainerMetadataFile: &containerMetadataFile,
+		ECSContainerMetadata:     containerMetadata,
+		ECSContainerStats:        containerStats,
+		ECSTaskMetadata:          taskMetadata,
+		ECSTaskStats:             taskStats,
+		ECSContainerMetadataFile: containerMetadataFile,
 	}
 }
